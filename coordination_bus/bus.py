@@ -277,6 +277,56 @@ class SecureEventBus:
             idempotency_key=row["idempotency_key"], signature=row["signature"])
             for row in rows]
 
+    def verified_events(self, project_id: str, *, recipient_agent: str | None = None,
+                        after_rowid: int = 0) -> list[tuple[int, EventEnvelope]]:
+        """Read events back with the same schema/HMAC verification `accept()` applies at write
+        time. `events()` alone does NOT re-verify signatures on read — a row inserted by any
+        means other than `accept()` (a direct DB write, a restored backup, a bug) would be
+        returned by `events()` unchecked. Callers that will act on payload content should use
+        this method, not `events()`.
+
+        Ordered by SQLite `rowid` (global and monotonically increasing within this database),
+        not `sequence` — `sequence` is scoped per `(project_id, sender_agent)`
+        (see the `UNIQUE(project_id, sender_agent, sequence)` constraint above), so two
+        different senders' events can legitimately carry the same sequence number. Per-sender
+        sequence gaps/replays are already rejected by `accept()` at write time; this method adds
+        the read-time signature check `events()` is missing, using `rowid` as a safe delivery
+        cursor since it cannot collide across senders.
+
+        A row that fails validation or signature verification is silently excluded, not raised —
+        a single tampered/undecodable row should not block delivery of every event after it.
+        """
+        query = "SELECT rowid, * FROM events WHERE project_id=? AND rowid>?"
+        params: list[Any] = [project_id, after_rowid]
+        if recipient_agent is not None:
+            query += " AND recipient_agent=?"
+            params.append(recipient_agent)
+        query += " ORDER BY rowid"
+        rows = self.db.execute(query, params).fetchall()
+        verified: list[tuple[int, EventEnvelope]] = []
+        for row in rows:
+            event = EventEnvelope(
+                event_id=row["event_id"], schema=row["schema"], correlation_id=row["correlation_id"],
+                project_id=row["project_id"], task_id=row["task_id"], sender_agent=row["sender_agent"],
+                recipient_agent=row["recipient_agent"], event_type=row["event_type"],
+                operation=row["operation"], base_commit=row["base_commit"],
+                allowed_paths=tuple(json.loads(row["allowed_paths"])),
+                payload=json.loads(row["payload"]), issued_at=row["issued_at"],
+                expires_at=row["expires_at"], sequence=row["sequence"],
+                idempotency_key=row["idempotency_key"], signature=row["signature"])
+            try:
+                event.validate(now=event.issued_at)
+            except ProtocolError:
+                continue
+            secret = self.secrets.get(event.sender_agent)
+            if secret is None:
+                continue
+            expected = hmac.new(secret.encode(), _canonical(event.unsigned()), hashlib.sha256).hexdigest()
+            if not hmac.compare_digest(event.signature, expected):
+                continue
+            verified.append((row["rowid"], event))
+        return verified
+
 
 class TaskBoard:
     def __init__(self, bus: SecureEventBus):

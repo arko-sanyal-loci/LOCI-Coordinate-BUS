@@ -88,6 +88,61 @@ def test_recipient_must_be_scoped_to_project():
         b.accept(forged)
 
 
+def test_verified_events_rejects_unsigned_direct_insert_but_returns_genuine_events():
+    b = bus()
+    genuine = b.publish(sender_agent="portfolio", project_id="codex-rag",
+                        event_type="memory.summary", operation="record_memory",
+                        payload={"summary": "authentic"})
+
+    # Simulate a row that bypassed accept() entirely (direct DB write, restored backup,
+    # a bug in some other writer) — same shape as a real row but with a signature that
+    # does not match any registered secret.
+    b.db.execute(
+        "INSERT INTO events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ("11111111-1111-1111-1111-111111111111", "loci.task.v1",
+         "22222222-2222-2222-2222-222222222222", "codex-rag", None, "portfolio", None,
+         "memory.summary", "record_memory", None, "[]",
+         '{"summary": "forged, no valid signature"}', genuine.issued_at + 1,
+         genuine.expires_at + 1, genuine.sequence + 1, "forged-idempotency-key",
+         "0" * 64))
+    b.db.commit()
+
+    # events() has no signature check — it returns both rows, forged included.
+    assert len(b.events("codex-rag")) == 2
+
+    # verified_events() re-checks HMAC on read and must exclude the forged row.
+    verified = b.verified_events("codex-rag")
+    assert len(verified) == 1
+    rowid, event = verified[0]
+    assert event.payload == {"summary": "authentic"}
+    assert event.signature == genuine.signature
+    assert rowid >= 1
+
+
+def test_verified_events_filters_by_recipient_and_after_rowid():
+    b = bus()
+    b.register_agent("portfolio", "p" * 32, projects={"codex-rag"},
+                     operations={"create_task", "record_memory", "send_message"})
+    b.register_agent("worker", "w" * 32, projects={"codex-rag"}, operations={
+        "claim_task", "heartbeat", "complete_task", "request_review", "open_conflict",
+        "send_message",
+    })
+    b.publish(sender_agent="portfolio", project_id="codex-rag", event_type="agent.message",
+             operation="send_message", recipient_agent="worker", payload={"n": 1})
+    second = b.publish(sender_agent="portfolio", project_id="codex-rag", event_type="agent.message",
+                       operation="send_message", recipient_agent="worker", payload={"n": 2})
+    b.publish(sender_agent="worker", project_id="codex-rag", event_type="agent.message",
+             operation="send_message", recipient_agent="portfolio", payload={"n": 3})
+
+    for_worker = b.verified_events("codex-rag", recipient_agent="worker")
+    assert [e.payload["n"] for _, e in for_worker] == [1, 2]
+
+    first_rowid = for_worker[0][0]
+    after_first = b.verified_events("codex-rag", recipient_agent="worker", after_rowid=first_rowid)
+    assert [e.payload["n"] for _, e in after_first] == [2]
+    assert after_first[0][1].signature == second.signature
+
+
 def test_heartbeat_renews_live_lease():
     b = bus()
     board = TaskBoard(b)
