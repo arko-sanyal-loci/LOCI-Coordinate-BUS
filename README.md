@@ -1,10 +1,13 @@
-# ⚠️ This Repository Has Been Archived
+# LOCI-Coordinate-BUS
 
-**This repository (`arko-sanyal-loci/LOCI-Coordinate-BUS`) is no longer maintained.**
-It was a stale predecessor of `loci-coordination-bus`, which has itself now
-been merged into the single canonical engine repo:
-
-## → [arko-sanyal-loci/LOCI-MEMORY-ENGINE](https://github.com/arko-sanyal-loci/LOCI-MEMORY-ENGINE) (`coordination_bus/`)
+> **This repository is no longer maintained.**
+>
+> Active development has moved to **[arko-sanyal-loci/LOCI-MEMORY-ENGINE](https://github.com/arko-sanyal-loci/LOCI-MEMORY-ENGINE)**,
+> which includes the full coordination bus, memory engine, and Glassbox ledger.
+>
+> You may also be looking for the **[Arc runtime](https://github.com/arko-sanyal-loci/arc)** or the
+> **[LOCI / CARD research papers](https://github.com/arko-sanyal-loci/loci-card-papers)**.
 
 ---
-*Consolidated: November 2026 by Arko Sanyal (Billo Tech).*
+
+*[Billo Tech](https://billo.tech) · founded by [Arko Sanyal](https://github.com/arko-sanyal-loci)*
